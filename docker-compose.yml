@@ -1,0 +1,121 @@
+version: '2.3'
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.6.0
+    container_name: elasticsearch
+    restart: always
+    environment:
+      - cluster.name=Your-cluster-Name
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:      
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - esnet
+  
+  logstash:
+    image: docker.elastic.co/logstash/logstash:6.6.0
+    container_name: logstash
+    restart: always
+    links:
+      - elasticsearch
+    volumes:
+      - /home/ccloud/logstash/config/:/usr/share/logstash/config/
+      - /home/ccloud/logstash/pipelines/:/usr/share/logstash/pipeline/    
+    ports:
+      - "5045:5045"
+      - "5046:5046"
+      - "9600:9600"
+    environment:
+      LS_JAVA_OPTS: "-Xmx256m -Xms256m"  
+    networks:
+      - esnet
+    depends_on:
+      - elasticsearch
+
+  grafana:
+    image: grafana:latest-with-plugins
+    container_name: grafana
+    restart: always
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - esnet
+
+  airflow-webserver:
+        image: airflow-elastic:latest
+        restart: always
+        depends_on:
+            - logstash
+            - postgres
+        environment:
+            - LOAD_EX=n
+            - FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+            - EXECUTOR=Local
+            - DAG_DEFAULT_VIEW = graph
+            - DAGS_ARE_PAUSED_AT_CREATION = False
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+        volumes:
+            - /home/ccloud/airflow_dags:/usr/local/airflow/dags
+            # Uncomment to include custom plugins
+            # - ./plugins:/usr/local/airflow/plugins
+        ports:
+            - "8080:8080"
+        command: webserver
+        networks:
+            - esnet
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+
+  airflow-scheduler:
+        image: airflow-elastic:latest
+        restart: always
+        depends_on:
+            - airflow-webserver
+        volumes:
+            - /home/ccloud/airflow_dags:/usr/local/airflow/dags
+            # Uncomment to include custom plugins
+            # - ./plugins:/usr/local/airflow/plugins
+        environment:
+            - LOAD_EX=n
+            - DAGS_ARE_PAUSED_AT_CREATION = False
+            - FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=   
+            - EXECUTOR=Local         
+            - POSTGRES_USER=PostreSQL_USER
+            - POSTGRES_PASSWORD=PostreSQL_Password
+            - POSTGRES_DB=PostreSQL_DB_NAME
+        networks:
+            - esnet   
+        command: scheduler
+  
+  postgres:
+        image: postgres:latest
+        restart: always
+        environment:
+            - POSTGRES_USER=PostreSQL_USER
+            - POSTGRES_PASSWORD=PostreSQL_Password
+            - POSTGRES_DB=PostreSQL_DB_NAME
+        networks:
+            - esnet
+
+volumes:
+  esdata:
+    driver: local
+  grafana-storage:
+    driver: local
+
+networks:
+  esnet:
